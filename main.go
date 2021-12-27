@@ -10,13 +10,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mstreet3/crypto-regression/curves"
+	"github.com/mstreet3/crypto-regression/objectives"
+	"gonum.org/v1/gonum/optimize"
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/plotter"
 	"gonum.org/v1/plot/vg"
 	"gonum.org/v1/plot/vg/draw"
 )
 
-func makePlot(path string, data plotter.XYs) {
+func makePlot(path string, data plotter.XYs, fit plotter.XYs) {
 
 	// xticks defines how we convert and display time.Time values.
 	xticks := plot.TimeTicks{Format: "2006-01-02"}
@@ -35,7 +38,17 @@ func makePlot(path string, data plotter.XYs) {
 	points.Shape = draw.CircleGlyph{}
 	points.Color = color.RGBA{R: 255, A: 255}
 
-	p.Add(line, points)
+	// p.Add(line, points)
+	p.Add(points)
+
+	if fit != nil {
+		line, _, err := plotter.NewLinePoints(fit)
+		if err != nil {
+			log.Panic(err)
+		}
+		line.Color = color.RGBA{G: 255, A: 255}
+		p.Add(line)
+	}
 
 	f, err := os.Create(path)
 	if err != nil {
@@ -47,7 +60,6 @@ func makePlot(path string, data plotter.XYs) {
 	}
 	if err = f.Close(); err != nil {
 		log.Panicf("could not close %s: %v", path, err)
-
 	}
 }
 
@@ -96,12 +108,37 @@ func readData(path string) (plotter.XYs, error) {
 	return xys, nil
 }
 
-func main() {
-	pxys, err := readData("7DAY-link-data.csv")
+func solveLogarithm() {
 
+	xys, err := readData("7DAY-link-data.csv")
 	if err != nil {
-		log.Fatalf("could not read data.txt: %v", err)
+		log.Fatalf("error loading data: %v", err.Error())
 	}
-	path := "timeseries.png"
-	makePlot(path, pxys)
+
+	predictor := curves.LogCurve
+	ss := objectives.MakeSumSquaresObj(xys, predictor)
+	leastSquares := optimize.Problem{
+		Func: ss,
+	}
+
+	initX := []float64{0.1, 0.5}
+	result, err := optimize.Minimize(leastSquares, initX, nil, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err = result.Status.Err(); err != nil {
+		log.Fatal(err)
+	}
+
+	var fit plotter.XYs
+	for _, pi := range xys {
+		pred := predictor([]float64{pi.X, result.X[0], result.X[1]})
+		fit = append(fit, struct{ X, Y float64 }{pi.X, pred})
+	}
+	makePlot("fit-result.png", xys, fit)
+}
+
+func main() {
+	solveLogarithm()
 }
